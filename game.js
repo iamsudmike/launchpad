@@ -19,6 +19,7 @@ let player, map, enemies, bullets, pickups, boss, explosions;
 let camera = {x: 0};
 let bossTriggered = false;
 let transTimer = 0;  // countdown for level-complete screen
+let levelTimer = 0;  // frames since level loaded, used for difficulty ramp
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────
 function init() {
@@ -43,6 +44,7 @@ function loadLevel(idx) {
   boss           = null;
   bossTriggered  = false;
   camera         = {x: 0};
+  levelTimer     = 0;
 }
 
 function makeEnemy(type, x, y) {
@@ -107,6 +109,8 @@ function update(dt) {
 function updateGame(dt) {
   const lvl = LEVELS[currentLevel];
 
+  levelTimer += dt;
+
   player.update(dt, map, bullets);
 
   // Boss trigger
@@ -116,16 +120,9 @@ function updateGame(dt) {
     boss = makeBoss(currentLevel, lvl.bossSpawnX * TILE, lvl.bossSpawnY * TILE);
   }
 
-  // Boss
+  // Boss update (death is checked AFTER the bullets loop so bullet kills register)
   if (boss && !boss.dead) {
     boss.update(dt, player, bullets);
-    if (boss.dead) {
-      score += 1000 * (currentLevel + 1);
-      pickups.push(new Pickup('health', boss.x + 10, boss.y));
-      pickups.push(new Pickup('health', boss.x + 40, boss.y));
-      gameState = currentLevel >= LEVELS.length - 1 ? 'victory' : 'levelComplete';
-      transTimer = 200;
-    }
   }
 
   // Enemies
@@ -163,6 +160,22 @@ function updateGame(dt) {
   }
   bullets = bullets.filter(b => !b.dead);
 
+  // Boss death check — placed AFTER bullets so kills from projectiles are caught
+  if (boss && boss.dead && !boss._deathHandled) {
+    boss._deathHandled = true;
+    score += 1000 * (currentLevel + 1);
+    pickups.push(new Pickup('health', boss.x + 10, boss.y));
+    pickups.push(new Pickup('health', boss.x + 40, boss.y));
+    Sound.bossDie();
+    if (currentLevel >= LEVELS.length - 1) {
+      gameState = 'victory';
+    } else {
+      gameState = 'levelComplete';
+      transTimer = 200;
+      Sound.levelComplete();
+    }
+  }
+
   // Explosions
   for (let i = explosions.length - 1; i >= 0; i--) {
     explosions[i].timer -= dt;
@@ -177,7 +190,7 @@ function updateGame(dt) {
 
   // Death
   if (player.hp <= 0) {
-    if (--lives <= 0) { gameState = 'gameOver'; }
+    if (--lives <= 0) { gameState = 'gameOver'; Sound.gameOver(); }
     else { loadLevel(currentLevel); }
     return;
   }
@@ -192,6 +205,7 @@ function updateGame(dt) {
 // ── Explosion AOE ─────────────────────────────────────────────────────────
 function explode(cx, cy, radius, dmg, fromPlayer) {
   explosions.push({ x: cx, y: cy, r: 0, maxR: radius, timer: 22, maxTimer: 22 });
+  Sound.explosion();
 
   if (fromPlayer) {
     enemies.forEach(e => {

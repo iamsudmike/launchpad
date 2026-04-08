@@ -85,6 +85,10 @@ class Player {
     const bx  = this.x + (this.facing ? this.w + 2 : -6);
     const by  = this.y + 11;
 
+    if (w.explosive)      Sound.shootRocket();
+    else if (w.id === 1)  Sound.shootBig();
+    else                  Sound.shoot();
+
     for (let i = 0; i < w.cnt; i++) {
       const angle = (i - (w.cnt - 1) / 2) * w.spread;
       bullets.push(new Bullet(bx, by, dir * w.spd * Math.cos(angle), w.spd * Math.sin(angle), w, true));
@@ -96,6 +100,7 @@ class Player {
     this.hp = Math.max(0, this.hp - amount);
     this.invincible = true;
     this.invTimer = 90;
+    Sound.playerHurt();
   }
 
   pickupWeapon(id, ammoAmt) {
@@ -104,10 +109,12 @@ class Player {
       this.ammo[id] = Math.min((this.ammo[id] || 0) + ammoAmt, WEAPONS[id].maxAmmo * 2);
     }
     this.weaponId = id;
+    Sound.pickup();
   }
 
   addHealth(amount) {
     this.hp = Math.min(this.maxHp, this.hp + amount);
+    Sound.pickup();
   }
 
   addAmmo(amount) {
