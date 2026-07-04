@@ -86,6 +86,26 @@ class Config:
     temperature: float = field(default_factory=lambda: _f("ORACLE_TEMPERATURE", 0.5))
     request_timeout: int = field(default_factory=lambda: _i("ORACLE_TIMEOUT_SEC", 180))
 
+    # ── Backend selection ──
+    # "openai"    = Ollama / LM Studio / OpenAI-compatible /chat/completions (default, offline)
+    # "anthropic" = Claude via the Messages API (opt-in quality boost)
+    llm_provider: str = field(default_factory=lambda: (os.environ.get("LLM_PROVIDER") or "openai").lower())
+    httpx_verify: object = field(default_factory=lambda: HTTPX_VERIFY)
+
+    # ── Claude (only used when llm_provider == "anthropic") ──
+    anthropic_api_key: str = field(default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", ""))
+    oracle_model: str = field(default_factory=lambda: os.environ.get("ORACLE_MODEL", "claude-opus-4-8"))
+    swarm_model: str = field(default_factory=lambda: os.environ.get("SWARM_MODEL", "claude-haiku-4-5"))
+    chat_model: str = field(default_factory=lambda: os.environ.get("CHAT_MODEL", "claude-haiku-4-5"))
+    # Optional daily "deep reading" — OFF by default: Fable 5 requires 30-day data
+    # retention, which conflicts with Pythia's offline/private ethos. Opt in knowingly.
+    deep_model: str = field(default_factory=lambda: os.environ.get("DEEP_MODEL", ""))
+    effort: str = field(default_factory=lambda: os.environ.get("ORACLE_EFFORT", "high"))
+    use_thinking: bool = field(default_factory=lambda: _b("ORACLE_THINKING", True))
+    use_prompt_caching: bool = field(default_factory=lambda: _b("ORACLE_CACHE", True))
+    # Floor for max output tokens when thinking is on (thinking bills as output).
+    min_output_tokens: int = field(default_factory=lambda: _i("ORACLE_MIN_OUTPUT_TOKENS", 8000))
+
     # ── Prediction behaviour ──
     horizons: list[str] = field(default_factory=lambda: [h.strip() for h in os.environ.get("HORIZONS", "24h,week,month,year").split(",") if h.strip()])
     predictions_per_horizon: int = field(default_factory=lambda: _i("PREDICTIONS_PER_HORIZON", 3))
@@ -96,13 +116,18 @@ class Config:
     swarm_enabled: bool = field(default_factory=lambda: _b("SWARM_ENABLED", True))
 
     def summary(self) -> dict:
-        return {
+        out = {
             "osiris_url": self.osiris_url,
+            "llm_provider": self.llm_provider,
             "llm_base_url": self.llm_base_url,
             "llm_model": self.llm_model,
             "horizons": self.horizons,
             "loop_interval_sec": self.loop_interval_sec,
         }
+        if self.llm_provider == "anthropic":
+            out.update(oracle_model=self.oracle_model, swarm_model=self.swarm_model,
+                       chat_model=self.chat_model, effort=self.effort)
+        return out
 
 
 CONFIG = Config()

@@ -68,4 +68,5 @@ if you don't actually need LAN access (it currently defaults to `0.0.0.0`).
   report feed + LLM status and per-feed success counts.
 - **No feed caching / backoff** in `osiris_intake.py` — hammers the free feeds
   every cycle; add per-feed TTL caching + exponential backoff.
-- **No tests** — start with the `oracle._parse` path and `require_auth`.
+- ~~No tests~~ — `tests/test_engine.py` now covers `oracle._parse` and the
+  `require_auth` policy matrix. Feed-intake and pipeline tests still open.

@@ -6,11 +6,39 @@ deep pass) as an opt-in boost — and pick up two wins that come free with the s
 **native structured outputs** (delete the brittle JSON scanner) and **prompt
 caching** (share the world-snapshot prefix across the swarm).
 
-The whole integration hangs off **one seam**: `Oracle._complete()` in `oracle.py`
-(line ~97). Everything — `predict`, `chat`, and the swarm — calls through it.
+The whole integration hangs off **one seam**: `Oracle._complete()` in `oracle.py`.
+Everything — `predict`, `chat`, and the swarm — calls through it.
 
-Status: `engine/llm_backend.py` is written (new module). The edits below to the
-two **existing** files are staged as diffs for us to apply together.
+## Status: APPLIED ✅
+
+All changes below are now applied to the working copy (config.py, oracle.py,
+swarm.py, llm_backend.py) and covered by `tests/test_engine.py`. Kept for
+reference/review. Corrections made during application (review pass):
+
+1. **Config fields actually added** — the first `llm_backend.py` commit
+   referenced `cfg.httpx_verify` / `cfg.llm_provider` / Claude knobs that only
+   existed in this doc; `Oracle()` would have crashed at import even on the
+   default Ollama path. Fixed by applying Change 1 for real.
+2. **Cache placement corrected** — the sketch put `cache_control` on the tiny
+   system block (~60 tokens, below Opus 4.8's 4096-token cacheable minimum: it
+   would never cache, and unread cache writes bill at 1.25×). Now: a neutral
+   `{"cache": true}` block hint marks the **large user-content prefix** (world
+   snapshot / chat context); the Anthropic backend translates it to
+   `cache_control`, the OpenAI backend flattens blocks to a string. Note the
+   full within-cycle win still requires the swarm to share the exact snapshot
+   prefix bytes (upstream swarm truncates the brief to 2,600 chars, so its
+   prefix differs — future work).
+3. **First-message guard** — Anthropic requires the conversation to open with a
+   `user` turn; `oracle.chat()` history slices can start with `assistant`.
+   `_split_system` now guards this.
+4. **`AnthropicBackend.health()`** was a tautology; now reports key presence
+   (cheap — `/links` polls it, so no API round-trip).
+5. **`min_output_tokens` default 4000 → 8000** — adaptive thinking bills as
+   output and shares the budget with ~12 predictions.
+6. **Refusal handling** — `stop_reason == "refusal"` now returns `""` with a
+   warning instead of surfacing partial/no content as a forecast.
+7. **Swarm routed** — `swarm.py` personas default to `CONFIG.swarm_model` on
+   the Claude backend (per-persona `STATE.swarm_models` overrides still win).
 
 ---
 

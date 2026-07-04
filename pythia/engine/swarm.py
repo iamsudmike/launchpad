@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 
+from .config import CONFIG
 from .models import AgentView, Prediction, WorldBrief
 from .state import STATE
 
@@ -51,7 +52,11 @@ def _persona_messages(name: str, lens: str, brief_text: str, preds: list[Predict
 async def _ask(oracle, name: str, lens: str, brief_text: str,
                preds: list[Prediction]) -> tuple[str, dict[int, tuple[float, str]]]:
     """Run one persona; return its {prediction_index: (probability, note)} map."""
-    persona_model = STATE.swarm_models.get(name) or None    # per-persona override (else main model)
+    # Per-persona override wins; otherwise the Claude backend routes personas to
+    # the cheap swarm model (re-scoring is ~80% of per-cycle tokens and the
+    # easiest task); the local backend keeps using the main model.
+    persona_model = (STATE.swarm_models.get(name)
+                     or (CONFIG.swarm_model if CONFIG.llm_provider == "anthropic" else None))
     try:
         text = await oracle._complete(_persona_messages(name, lens, brief_text, preds), max_tokens=1300, model=persona_model)
     except Exception as e:  # noqa: BLE001
