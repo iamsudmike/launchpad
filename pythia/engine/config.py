@@ -65,6 +65,20 @@ class Config:
     engine_host: str = field(default_factory=lambda: os.environ.get("ENGINE_HOST", "0.0.0.0"))
     engine_port: int = field(default_factory=lambda: _i("ENGINE_PORT", 8088))
 
+    # ── API security ──
+    # Shared secret required on mutating endpoints (/model, /swarm/model, /predict,
+    # /chat, /loop). Empty = none. When empty AND the engine is bound to a
+    # non-loopback host, remote mutating requests are refused (fail-closed once
+    # exposed). Set this whenever the engine is reachable beyond localhost.
+    api_token: str = field(default_factory=lambda: os.environ.get("PYTHIA_API_TOKEN", ""))
+    # Browser origins allowed to call the API (CSRF / drive-by protection).
+    # Defaults to the local Osiris UI only — NOT wide open.
+    cors_origins: list[str] = field(default_factory=lambda: [
+        o.strip() for o in os.environ.get(
+            "CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
+        ).split(",") if o.strip()
+    ])
+
     # ── Oracle LLM (defaults to MiroFish's configured local model) ──
     llm_base_url: str = field(default_factory=lambda: os.environ.get("LLM_BASE_URL") or _MF.get("LLM_BASE_URL") or "http://localhost:11434/v1")
     llm_api_key: str = field(default_factory=lambda: os.environ.get("LLM_API_KEY") or _MF.get("LLM_API_KEY") or "ollama")

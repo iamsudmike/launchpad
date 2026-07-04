@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -15,6 +16,41 @@ from .state import STATE
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("pythia.server")
 
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
+def _provided_token(request: Request) -> str:
+    """Read the caller's token from X-API-Key or `Authorization: Bearer <token>`."""
+    tok = request.headers.get("x-api-key", "")
+    if not tok:
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            tok = auth[7:].strip()
+    return tok
+
+
+async def require_auth(request: Request) -> None:
+    """Guard for mutating endpoints.
+
+    - PYTHIA_API_TOKEN set  -> require it (constant-time compare).
+    - Unset AND engine bound to a non-loopback host -> refuse remote mutating
+      requests (fail-closed once exposed to the network).
+    - Unset AND bound to loopback -> allow (local dev; warned at startup).
+    """
+    token = CONFIG.api_token
+    if token:
+        if not hmac.compare_digest(_provided_token(request), token):
+            raise HTTPException(401, "invalid or missing API token")
+        return
+    exposed = CONFIG.engine_host not in _LOOPBACK
+    client_host = request.client.host if request.client else ""
+    if exposed and client_host not in _LOOPBACK:
+        raise HTTPException(
+            503,
+            "engine is exposed on a non-loopback host with no PYTHIA_API_TOKEN set; "
+            "refusing mutating request. Set PYTHIA_API_TOKEN to enable remote control.",
+        )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -23,6 +59,11 @@ async def lifespan(app: FastAPI):
     LOOP.start()
     SENSE.start()   # keep live events fresh between forecasts
     log.info("PYTHIA oracle up | %s", CONFIG.summary())
+    if not CONFIG.api_token and CONFIG.engine_host not in _LOOPBACK:
+        log.warning(
+            "SECURITY: mutating endpoints are UNAUTHENTICATED and the engine is bound "
+            "to %s (non-loopback). Remote mutating requests will be refused; set "
+            "PYTHIA_API_TOKEN to enable controlled remote access.", CONFIG.engine_host)
 
     async def _boot():
         from .runtime import intake
@@ -41,7 +82,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="PYTHIA Oracle", version="0.2.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# Locked to the local Osiris UI by default (was allow_origins=["*"]). Override
+# with CORS_ORIGINS. This blocks cross-origin drive-by requests from other sites
+# open in the same browser; the API token guards non-browser clients.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CONFIG.cors_origins,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "X-API-Key", "Content-Type"],
+    allow_credentials=False,
+)
 
 
 @app.get("/health")
@@ -55,19 +105,23 @@ async def config():
 
 
 _links_cache: dict = {"ts": 0.0, "data": None}
+_links_lock = asyncio.Lock()
 
 
 @app.get("/links")
 async def links():
     import time as _t
-    now = _t.monotonic()
-    if _links_cache["data"] and now - _links_cache["ts"] < 8:
-        data = dict(_links_cache["data"])
-    else:
-        from .runtime import intake, oracle
-        osiris_up, oracle_up = await asyncio.gather(intake.health(), oracle.health())
-        data = {"engine": True, "osiris": bool(osiris_up), "oracle": bool(oracle_up)}
-        _links_cache.update(ts=now, data=dict(data))
+    # Serialize the read-modify-write so concurrent callers don't fire N health
+    # probes at once or interleave on the shared cache dict.
+    async with _links_lock:
+        now = _t.monotonic()
+        if _links_cache["data"] and now - _links_cache["ts"] < 8:
+            data = dict(_links_cache["data"])
+        else:
+            from .runtime import intake, oracle
+            osiris_up, oracle_up = await asyncio.gather(intake.health(), oracle.health())
+            data = {"engine": True, "osiris": bool(osiris_up), "oracle": bool(oracle_up)}
+            _links_cache.update(ts=now, data=dict(data))
     from .runtime import oracle as _oracle
     data.update(model=_oracle.model, generating=STATE.generating,
                 loop=STATE.loop_enabled, last_run_ms=STATE.last_run_ms,
@@ -82,7 +136,7 @@ async def models():
     return {"models": await oracle.list_models(), "current": oracle.model}
 
 
-@app.post("/model")
+@app.post("/model", dependencies=[Depends(require_auth)])
 async def set_model(payload: dict = Body(...)):
     """Switch the oracle's model at runtime."""
     from .runtime import oracle
@@ -108,7 +162,7 @@ async def swarm_models_get():
     }
 
 
-@app.post("/swarm/model")
+@app.post("/swarm/model", dependencies=[Depends(require_auth)])
 async def swarm_model_set(payload: dict = Body(...)):
     """Set (or clear) the model for one swarm persona. Empty/blank model = use the main model."""
     from .swarm import PERSONAS
@@ -135,7 +189,7 @@ async def predictions(horizon: str | None = None, min_probability: float = 0.0):
             "world": STATE.world.model_dump() if STATE.world else None}
 
 
-@app.post("/predict")
+@app.post("/predict", dependencies=[Depends(require_auth)])
 async def predict():
     """Run an oracle pass now (sense the world -> forecast)."""
     from .pipeline import run_prediction
@@ -229,7 +283,7 @@ async def stream():
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-@app.post("/chat")
+@app.post("/chat", dependencies=[Depends(require_auth)])
 async def chat(payload: dict = Body(...)):
     """Ask the oracle anything — it sees every live source + current predictions."""
     from .runtime import intake, oracle
@@ -248,7 +302,7 @@ async def chat(payload: dict = Body(...)):
     return {"answer": answer}
 
 
-@app.post("/loop")
+@app.post("/loop", dependencies=[Depends(require_auth)])
 async def loop(payload: dict = Body(default={})):
     STATE.set_loop(bool(payload.get("enabled", not STATE.loop_enabled)))
     return {"loop_enabled": STATE.loop_enabled}
