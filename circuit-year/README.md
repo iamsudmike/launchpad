@@ -48,6 +48,18 @@ cp .env.example .env.local   # fill in values
 npm run dev
 ```
 
+## Hardening checklist
+
+Do all five. The app's security model assumes them.
+
+1. **Disable signups in Supabase**: Authentication > Sign In / Up > turn off "Allow new users to sign up". Load-bearing: RLS trusts any authenticated user, and your account must be the only one that can exist. Do this right after creating your own user.
+2. **Strong, unique password** on your app account. It is the front door; there is no second factor on the app itself.
+3. **Turn on 2FA** on the GitHub, Vercel, and Supabase accounts. Whoever controls those consoles controls the app and the database; this is the most realistic attack path.
+4. **Keep this repo private.** It holds no secrets, but the schema and seed events are themselves sensitive.
+5. **Treat the calendar feed URL as a secret.** It is protected only by its unguessable token; anyone holding the exact URL can read Going events, trips, and deadlines. Revoke and regenerate it in SETUP if it ever leaks. Skipping the feed entirely is a valid choice; the app works without it.
+
+Known residual risks, accepted by design: the .ics feed is URL-token auth because Google Calendar fetches it unauthenticated, and subscribed events get stored in your Google account; Supabase and Vercel are trusted infrastructure (encrypted at rest and in transit, not end-to-end encrypted). The biometric lock is a convenience gate, not encryption; the phone's lock screen is the real device-level protection.
+
 ## Privacy posture
 
 - RLS on every table; anonymous access gets nothing; signups disabled so the single account is the only way in.
